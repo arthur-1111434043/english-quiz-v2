@@ -332,6 +332,17 @@
         toggleModeDesc();
     }
 
+    function saveUserPrefs() {
+        const prefs = {
+            mode: document.getElementById('quizMode').value,
+            count: document.getElementById('optCount').value,
+            order: document.getElementById('optOrder').value,
+            startUnit: document.getElementById('startUnit').value,
+            endUnit: document.getElementById('endUnit').value
+        };
+        localStorage.setItem('quizUserPrefs', JSON.stringify(prefs));
+    }
+
     function updateConfigUI() {
         if(wordDatabase.length === 0) return;
         const units = [...new Set(wordDatabase.map(w => w.unit))].sort((a, b) => {
@@ -341,13 +352,32 @@
         const startSel = document.getElementById('startUnit'); const endSel = document.getElementById('endUnit');
         startSel.innerHTML = ''; endSel.innerHTML = '';
         units.forEach(u => { startSel.add(new Option(u, u)); endSel.add(new Option(u, u)); });
-        endSel.selectedIndex = units.length - 1; 
+
+        const savedPrefs = JSON.parse(localStorage.getItem('quizUserPrefs'));
+        if (savedPrefs) {
+            if (savedPrefs.mode) document.getElementById('quizMode').value = savedPrefs.mode;
+            if (savedPrefs.count) document.getElementById('optCount').value = savedPrefs.count;
+            if (savedPrefs.order) document.getElementById('optOrder').value = savedPrefs.order;
+            if (savedPrefs.startUnit && units.includes(savedPrefs.startUnit)) {
+                startSel.value = savedPrefs.startUnit;
+            }
+            if (savedPrefs.endUnit && units.includes(savedPrefs.endUnit)) {
+                endSel.value = savedPrefs.endUnit;
+            } else {
+                endSel.selectedIndex = units.length - 1;
+            }
+            toggleModeDesc();
+        } else {
+            endSel.selectedIndex = units.length - 1;
+        }
+
         document.getElementById('dbStats').innerHTML = `📦 總題庫量: <b>${wordDatabase.length} 字</b>`;
         document.getElementById('resumeBtn').style.display = casualState ? 'block' : 'none';
     }
 
     function startNewQuiz() {
         if(casualState && !confirm("開始新測驗將會覆蓋您之前未完成的「順順考」進度，確定？")) return;
+        saveUserPrefs();
         currentMode = document.getElementById('quizMode').value;
         quizSettings.count = parseInt(document.getElementById('optCount').value);
         quizSettings.order = document.getElementById('optOrder').value;
@@ -568,6 +598,10 @@
             const fBox = document.getElementById('feedbackBox');
             if (fBox.classList.contains('show')) nextQuestion();
         }
+    });
+
+    ['quizMode', 'optCount', 'optOrder', 'startUnit', 'endUnit'].forEach(id => {
+        document.getElementById(id).addEventListener('change', saveUserPrefs);
     });
 
     loadDatabase();
