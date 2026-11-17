@@ -76,7 +76,6 @@
         .controls > div { flex: 1; min-width: 120px; }
         .controls label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--text-muted); font-weight: 500;}
 
-        /* 彈性排版修正：自動換行、間距適應 */
         .stats {
             display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px;
             background-color: var(--bg-color); padding: 15px 20px; border-radius: 12px; 
@@ -183,9 +182,9 @@
             </div>
         </div>
 
-        <button class="btn-primary" onclick="startNewQuiz()" style="padding: 16px; font-size: 18px; margin-top: 10px;">開始測驗</button>
+        <button id="startBtn" class="btn-primary" onclick="startNewQuiz()" style="padding: 16px; font-size: 18px; margin-top: 10px;">開始測驗</button>
         <button class="btn-theme" style="width: 100%; margin-top: 15px;" onclick="showSection('setupSection')">重新匯入新題庫</button>
-        <button class="btn-theme" style="width: 100%; margin-top: 15px; color: var(--danger); background: rgba(229,62,62,0.1);" onclick="clearAllProgress()">清除所有學習與錯題紀錄</button>
+        <button id="clearBtn" class="btn-theme" style="width: 100%; margin-top: 15px; color: var(--danger); background: rgba(229,62,62,0.1);" onclick="clearAllProgress()">清除所有學習與錯題紀錄</button>
     </div>
 
     <!-- 步驟三：刷題區 -->
@@ -223,6 +222,10 @@
 
     // 順順考狀態記憶
     let casualState = JSON.parse(localStorage.getItem('casualSession')) || null;
+
+    // 雙擊確認計時器
+    let clearConfirmTimer = null;
+    let startConfirmTimer = null;
 
     // 不規則動詞大全
     const irregularMap = {
@@ -266,18 +269,45 @@
         }
     }
 
-    function clearAllProgress() {
-        if(confirm("確定要清除所有紀錄？這將重置 SM-2 的熟練度記憶，並刪除順順考的未完成進度！")) {
-            localStorage.removeItem('sm2Progress');
-            localStorage.removeItem('globalTurn');
-            localStorage.removeItem('casualSession');
-            sm2Progress = {}; globalTurn = 0; casualState = null;
-            updateConfigUI(); alert("紀錄已完全清除！");
+    function resetConfirmButtons() {
+        clearTimeout(startConfirmTimer);
+        clearTimeout(clearConfirmTimer);
+        const startBtn = document.getElementById('startBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        if (startBtn) {
+            delete startBtn.dataset.confirmed;
+            startBtn.innerText = '開始測驗';
+        }
+        if (clearBtn) {
+            delete clearBtn.dataset.confirmed;
+            clearBtn.innerText = '清除所有學習與錯題紀錄';
         }
     }
 
+    function clearAllProgress() {
+        const btn = document.getElementById('clearBtn');
+        if (!btn.dataset.confirmed) {
+            btn.dataset.confirmed = 'true';
+            btn.innerText = '⚠️ 確定清除？3 秒內再按一次確認';
+            clearConfirmTimer = setTimeout(() => {
+                delete btn.dataset.confirmed;
+                btn.innerText = '清除所有學習與錯題紀錄';
+            }, 3000);
+            return;
+        }
+
+        clearTimeout(clearConfirmTimer);
+        delete btn.dataset.confirmed;
+        localStorage.removeItem('sm2Progress');
+        localStorage.removeItem('globalTurn');
+        localStorage.removeItem('casualSession');
+        sm2Progress = {}; globalTurn = 0; casualState = null;
+        updateConfigUI();
+        btn.innerText = '✅ 紀錄已完全清除！';
+        setTimeout(() => { btn.innerText = '清除所有學習與錯題紀錄'; }, 2000);
+    }
+
     async function fetchDataFromUrl() {
-        // 預設抓取檔名
         const url = document.getElementById('dbUrl').value.trim() || 'vocab-pro.txt';
         const btn = document.getElementById('fetchBtn');
         btn.innerText = "載入中..."; btn.disabled = true;
@@ -344,6 +374,7 @@
     }
 
     function updateConfigUI() {
+        resetConfirmButtons();
         if(wordDatabase.length === 0) return;
         const units = [...new Set(wordDatabase.map(w => w.unit))].sort((a, b) => {
             const [a1, a2] = a.split('-').map(Number); const [b1, b2] = b.split('-').map(Number);
@@ -376,7 +407,21 @@
     }
 
     function startNewQuiz() {
-        if(casualState && !confirm("開始新測驗將會覆蓋您之前未完成的「順順考」進度，確定？")) return;
+        const btn = document.getElementById('startBtn');
+        if (casualState && !btn.dataset.confirmed) {
+            btn.dataset.confirmed = 'true';
+            btn.innerText = '⚠️ 將覆蓋順順考進度，3 秒內再按一次確認';
+            startConfirmTimer = setTimeout(() => {
+                delete btn.dataset.confirmed;
+                btn.innerText = '開始測驗';
+            }, 3000);
+            return;
+        }
+
+        clearTimeout(startConfirmTimer);
+        delete btn.dataset.confirmed;
+        btn.innerText = '開始測驗';
+
         saveUserPrefs();
         currentMode = document.getElementById('quizMode').value;
         quizSettings.count = parseInt(document.getElementById('optCount').value);
@@ -406,13 +451,11 @@
 
     // --- SM-2 演算法核心 ---
     function getNextSm2Word() {
-        // 從選取範圍找出該複習的字
         let due = currentQuizPool.filter(w => {
             const p = sm2Progress[w.id];
             return !p || p.nextReview <= globalTurn;
         });
 
-        // 如果目前沒有緊急要複習的，找最接近的，避免測驗中斷
         if (due.length === 0) {
             due = currentQuizPool.sort((a, b) => (sm2Progress[a.id].nextReview - sm2Progress[b.id].nextReview)).slice(0, 5);
         }
