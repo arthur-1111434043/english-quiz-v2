@@ -265,7 +265,7 @@
         if(mode === 'casual') {
             desc.innerHTML = "💡 <b>順順考</b>：照著單元順序一題一題刷。答錯的字會先丟進「錯題池」，等該節結束再抓出來考到對為止。中途離開會自動存檔，適合剛開始背單字打底。";
         } else {
-            desc.innerHTML = "💡 <b>循序漸進 (SM-2)</b>：在指定範圍內大亂鬥！答對的字會拉長下次出現的間距，答錯強制插隊重考，大腦不需思考，直覺點擊選項即可自動安排最佳複習時程。";
+            desc.innerHTML = "💡 <b>循序漸進 (SM-2)</b>：在指定範圍內大亂鬥！答錯的字會優先插隊重考，答對則依熟練度拉長複習間距，自動安排最佳複習時程。";
         }
     }
 
@@ -449,17 +449,37 @@
         showSection('quizSection'); executeNext();
     }
 
-    // --- SM-2 演算法核心 ---
+    // --- SM-2 演算法核心（錯題優先插隊版） ---
     function getNextSm2Word() {
-        let due = currentQuizPool.filter(w => {
+        // 1. 優先抓出「已經考過且到期該複習」的題目（錯題 interval=1，隔一題就會進來）
+        let reviewDue = currentQuizPool.filter(w => {
             const p = sm2Progress[w.id];
-            return !p || p.nextReview <= globalTurn;
+            return p && p.nextReview <= globalTurn;
         });
 
-        if (due.length === 0) {
-            due = currentQuizPool.sort((a, b) => (sm2Progress[a.id].nextReview - sm2Progress[b.id].nextReview)).slice(0, 5);
+        if (reviewDue.length > 0) {
+            // 答錯的題目 (repetition === 0) 排最前面，其次按到期先後排序
+            reviewDue.sort((a, b) => {
+                const pa = sm2Progress[a.id], pb = sm2Progress[b.id];
+                if (pa.repetition !== pb.repetition) return pa.repetition - pb.repetition;
+                return pa.nextReview - pb.nextReview;
+            });
+            // 從最急迫的前 3 題中抽一題（避免連續兩題重複，同時確保錯題絕對優先）
+            const topUrgent = reviewDue.slice(0, 3);
+            const candidates = topUrgent.filter(w => !currentQuestion || w.id !== currentQuestion.id);
+            const pool = candidates.length > 0 ? candidates : topUrgent;
+            return pool[Math.floor(Math.random() * pool.length)];
         }
-        return due[Math.floor(Math.random() * due.length)];
+
+        // 2. 沒有任何到期錯題時，才從「尚未考過的新單字」中出題
+        let unseen = currentQuizPool.filter(w => !sm2Progress[w.id]);
+        if (unseen.length > 0) {
+            return unseen[Math.floor(Math.random() * unseen.length)];
+        }
+
+        // 3. 全部單字都背過且還沒到期時，挑最快到期的題目繼續複習
+        let upcoming = [...currentQuizPool].sort((a, b) => sm2Progress[a.id].nextReview - sm2Progress[b.id].nextReview);
+        return upcoming[0];
     }
 
     function handleSm2Answer(isCorrect, wordId) {
@@ -548,15 +568,20 @@
         const shuffled = Array.from(options).sort(() => Math.random() - 0.5);
         const container = document.getElementById('optionsContainer');
         shuffled.forEach(opt => {
-            const btn = document.createElement('button'); btn.className = 'option-btn'; btn.innerText = opt.word;
-            btn.onclick = () => processUserAnswer(opt, shuffled, btn); container.appendChild(btn);
+            const btn = document.createElement('button');
+            btn.className = 'option-btn';
+            btn.dataset.id = opt.id;
+            btn.innerText = opt.word.replace(/^[A-Z](?=[a-z])/, c => c.toLowerCase());
+            btn.onclick = () => processUserAnswer(opt, shuffled, btn);
+            container.appendChild(btn);
         });
         updateQuizUIState();
     }
 
     function processUserAnswer(selectedOpt, allOptions, selectedBtn) {
         document.querySelectorAll('.option-btn').forEach(b => {
-            b.disabled = true; if (b.innerText === currentQuestion.word) b.classList.add('correct');
+            b.disabled = true;
+            if (b.dataset.id === currentQuestion.id) b.classList.add('correct');
         });
         const isCorrect = selectedOpt.id === currentQuestion.id;
         if (!isCorrect) selectedBtn.classList.add('wrong');
