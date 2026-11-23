@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>極速刷題神器 (終極改版)</title>
+    <script>
+        const initDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.setAttribute('data-theme', initDark ? 'dark' : 'light');
+    </script>
     <style>
         :root {
             --bg-color: #f4f6f8;
@@ -99,9 +103,10 @@
         @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         .feedback.correct { background-color: rgba(72, 187, 120, 0.15); border-left: 6px solid var(--success); }
         .feedback.wrong { background-color: rgba(229, 62, 62, 0.15); border-left: 6px solid var(--danger); }
-        .feedback h3 { margin: 0 0 10px 0; display: flex; align-items: center; gap: 10px;}
+        .feedback h3 { margin: 0 0 10px 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;}
         .feedback p { margin: 6px 0; font-size: 16px; line-height: 1.5;}
         .word-highlight { font-weight: 700; color: var(--primary); font-size: 20px;}
+        .time-tag { font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 20px; background: var(--bg-color); color: var(--text-muted); }
         .sys-msg { color: var(--success); font-size: 14px; margin-top: 10px; display: none; }
         .badge { background: var(--danger); color: white; padding: 3px 8px; border-radius: 6px; font-size: 12px; vertical-align: middle; margin-left: 5px; font-weight: 600;}
     </style>
@@ -197,7 +202,10 @@
         <div class="options" id="optionsContainer"></div>
 
         <div id="feedbackBox" class="feedback">
-            <h3 id="feedbackTitle">結果</h3>
+            <h3>
+                <span id="feedbackTitle">結果</span>
+                <span class="time-tag" id="fbTimeBadge">⏱️ 0.0 秒</span>
+            </h3>
             <p><span class="word-highlight" id="fbWord">Word</span> <span id="fbTranslation" style="color:var(--text-muted);">翻譯</span></p>
             <p id="fbSentence">完整例句</p>
             <hr style="border: 1px solid var(--border-color); margin: 15px 0;">
@@ -214,6 +222,7 @@
     let currentMode = 'casual'; 
     let currentQuizPool = [];
     let currentQuestion = null;
+    let questionStartTime = 0;
     let quizSettings = { count: 4, order: 'sequential' };
     
     // SM-2 全域狀態記憶
@@ -246,12 +255,22 @@
         'hear': ['heard'], 'understand': ['understood']
     };
 
-    function toggleTheme() {
-        const html = document.documentElement;
-        const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-        html.setAttribute('data-theme', next);
-        document.getElementById('themeToggle').innerText = next === 'dark' ? '淺色模式' : '深色模式';
+    function applyTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        const btn = document.getElementById('themeToggle');
+        if (btn) btn.innerText = theme === 'dark' ? '淺色模式' : '深色模式';
     }
+
+    function toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme');
+        applyTheme(current === 'dark' ? 'light' : 'dark');
+    }
+
+    const systemThemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+    applyTheme(systemThemeMedia.matches ? 'dark' : 'light');
+    systemThemeMedia.addEventListener('change', e => {
+        applyTheme(e.matches ? 'dark' : 'light');
+    });
 
     function showSection(sectionId) {
         document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
@@ -265,7 +284,7 @@
         if(mode === 'casual') {
             desc.innerHTML = "💡 <b>順順考</b>：照著單元順序一題一題刷。答錯的字會先丟進「錯題池」，等該節結束再抓出來考到對為止。中途離開會自動存檔，適合剛開始背單字打底。";
         } else {
-            desc.innerHTML = "💡 <b>循序漸進 (SM-2)</b>：在指定範圍內大亂鬥！答錯的字會優先插隊重考，答對則依熟練度拉長複習間距，自動安排最佳複習時程。";
+            desc.innerHTML = "💡 <b>循序漸進 (SM-2 + 作答計時)</b>：依句長動態計算反應時間。<b>秒殺答對</b>會大幅拉長複習間距，<b>猶豫過久</b>會縮短間距，<b>答錯</b>則優先插隊重考。";
         }
     }
 
@@ -336,7 +355,8 @@
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             if (/^\d+-\d+$/.test(line)) { currentUnit = line; continue; }
-            const wordMatch = line.match(/^([a-zA-Z\-\.\s]+?)\s+(.*[\u4E00-\u9FFF].*)$/);
+            // 完整抓取英文單字與片語（如 check out），直到遇到詞性標記或中文字元為止
+            const wordMatch = line.match(/^([a-zA-Z][a-zA-Z0-9\-\.\'\/\s]*?)\s+(?=(?:(?:n|v|vt|vi|adj|adv|prep|conj|pron|int|aux|art|phr)\.|[\u4E00-\u9FFF\u3000-\u303F\uFF00-\uFFEF（(【\[]))(.*)$/);
             
             if (wordMatch && !currentWord) {
                 currentWord = {
@@ -355,10 +375,51 @@
         setTimeout(() => showSection('configSection'), 800);
     }
 
+    // 自動修復瀏覽器快取中誤被拆開的片語（如 check + out 付款櫃檯 -> check out + 付款櫃檯）
+    function repairWordItem(item) {
+        if (!item || !item.translation) return false;
+        const m = item.translation.match(/^([a-zA-Z][a-zA-Z0-9\-\'\/]*(?:\s+[a-zA-Z][a-zA-Z0-9\-\'\/]*)*)\s+([\u4E00-\u9FFF（(【\[].*)$/);
+        if (m && !/^(?:n|v|vt|vi|adj|adv|prep|conj|pron|int|aux|art|phr)\./i.test(item.translation)) {
+            const oldId = item.id;
+            item.word = `${item.word} ${m[1]}`.trim();
+            item.translation = m[2].trim();
+            item.id = `${item.unit}_${item.word}`;
+            if (sm2Progress[oldId] && !sm2Progress[item.id]) {
+                sm2Progress[item.id] = sm2Progress[oldId];
+                delete sm2Progress[oldId];
+            }
+            return true;
+        }
+        return false;
+    }
+
     function loadDatabase() {
         const savedDB = localStorage.getItem('vocabularyDatabase');
-        if (savedDB) { wordDatabase = JSON.parse(savedDB); showSection('configSection'); } 
-        else { showSection('setupSection'); }
+        if (savedDB) {
+            wordDatabase = JSON.parse(savedDB);
+            let dbChanged = false;
+            wordDatabase.forEach(item => {
+                if (repairWordItem(item)) dbChanged = true;
+            });
+            if (dbChanged) {
+                localStorage.setItem('vocabularyDatabase', JSON.stringify(wordDatabase));
+                localStorage.setItem('sm2Progress', JSON.stringify(sm2Progress));
+            }
+            if (casualState) {
+                let casualChanged = false;
+                ['pendingWords', 'reviewQueue', 'wrongPool'].forEach(key => {
+                    if (Array.isArray(casualState[key])) {
+                        casualState[key].forEach(item => {
+                            if (repairWordItem(item)) casualChanged = true;
+                        });
+                    }
+                });
+                if (casualChanged) localStorage.setItem('casualSession', JSON.stringify(casualState));
+            }
+            showSection('configSection');
+        } else {
+            showSection('setupSection');
+        }
         toggleModeDesc();
     }
 
@@ -449,56 +510,84 @@
         showSection('quizSection'); executeNext();
     }
 
-    // --- SM-2 演算法核心（錯題優先插隊版） ---
+    // --- SM-2 演算法核心（錯題優先插隊 + 作答時間分級） ---
     function getNextSm2Word() {
-        // 1. 優先抓出「已經考過且到期該複習」的題目（錯題 interval=1，隔一題就會進來）
         let reviewDue = currentQuizPool.filter(w => {
             const p = sm2Progress[w.id];
             return p && p.nextReview <= globalTurn;
         });
 
         if (reviewDue.length > 0) {
-            // 答錯的題目 (repetition === 0) 排最前面，其次按到期先後排序
             reviewDue.sort((a, b) => {
                 const pa = sm2Progress[a.id], pb = sm2Progress[b.id];
                 if (pa.repetition !== pb.repetition) return pa.repetition - pb.repetition;
                 return pa.nextReview - pb.nextReview;
             });
-            // 從最急迫的前 3 題中抽一題（避免連續兩題重複，同時確保錯題絕對優先）
             const topUrgent = reviewDue.slice(0, 3);
             const candidates = topUrgent.filter(w => !currentQuestion || w.id !== currentQuestion.id);
             const pool = candidates.length > 0 ? candidates : topUrgent;
             return pool[Math.floor(Math.random() * pool.length)];
         }
 
-        // 2. 沒有任何到期錯題時，才從「尚未考過的新單字」中出題
         let unseen = currentQuizPool.filter(w => !sm2Progress[w.id]);
         if (unseen.length > 0) {
             return unseen[Math.floor(Math.random() * unseen.length)];
         }
 
-        // 3. 全部單字都背過且還沒到期時，挑最快到期的題目繼續複習
         let upcoming = [...currentQuizPool].sort((a, b) => sm2Progress[a.id].nextReview - sm2Progress[b.id].nextReview);
         return upcoming[0];
     }
 
-    function handleSm2Answer(isCorrect, wordId) {
+    function evaluateResponseQuality(isCorrect, elapsedSec, sentence) {
+        if (!isCorrect) return { quality: 1, label: '答錯重排' };
+
+        const wordCount = sentence.trim().split(/\s+/).length;
+        const fastLimit = Math.max(3.0, 1.5 + wordCount * 0.22);
+        const slowLimit = fastLimit * 2.2;
+
+        if (elapsedSec <= fastLimit) {
+            return { quality: 5, label: '⚡ 秒殺記憶' };
+        } else if (elapsedSec <= slowLimit) {
+            return { quality: 4, label: '👍 正常穩健' };
+        } else {
+            return { quality: 3, label: '🤔 猶豫較久' };
+        }
+    }
+
+    function handleSm2Answer(isCorrect, wordId, elapsedSec, sentence) {
         if (!sm2Progress[wordId]) sm2Progress[wordId] = { interval: 0, repetition: 0, efactor: 2.5, nextReview: 0 };
         let p = sm2Progress[wordId];
         globalTurn++;
 
-        if (isCorrect) {
+        const { quality, label } = evaluateResponseQuality(isCorrect, elapsedSec, sentence);
+
+        if (quality < 3) {
+            p.repetition = 0;
+            p.interval = 1;
+            p.efactor = Math.max(1.3, p.efactor - 0.2);
+        } else if (quality === 3) {
             if (p.repetition === 0) p.interval = 1;
+            else p.interval = Math.max(1, Math.round(p.interval * 1.2));
+            p.repetition++;
+            p.efactor = Math.max(1.3, p.efactor - 0.14);
+        } else if (quality === 4) {
+            if (p.repetition === 0) p.interval = 2;
             else if (p.repetition === 1) p.interval = 6;
             else p.interval = Math.round(p.interval * p.efactor);
             p.repetition++;
         } else {
-            p.repetition = 0; p.interval = 1; p.efactor = Math.max(1.3, p.efactor - 0.15);
+            if (p.repetition === 0) p.interval = 4;
+            else if (p.repetition === 1) p.interval = 8;
+            else p.interval = Math.round(p.interval * p.efactor * 1.2);
+            p.repetition++;
+            p.efactor = Math.min(3.0, p.efactor + 0.1);
         }
+
         p.nextReview = globalTurn + p.interval;
-        
         localStorage.setItem('sm2Progress', JSON.stringify(sm2Progress));
         localStorage.setItem('globalTurn', globalTurn);
+
+        return `${label}・下次間隔 ${p.interval} 題`;
     }
 
     // --- 順順考邏輯 ---
@@ -575,10 +664,15 @@
             btn.onclick = () => processUserAnswer(opt, shuffled, btn);
             container.appendChild(btn);
         });
+
+        questionStartTime = Date.now();
         updateQuizUIState();
     }
 
     function processUserAnswer(selectedOpt, allOptions, selectedBtn) {
+        const rawSec = (Date.now() - questionStartTime) / 1000;
+        const elapsedSec = Math.min(rawSec, 30);
+
         document.querySelectorAll('.option-btn').forEach(b => {
             b.disabled = true;
             if (b.dataset.id === currentQuestion.id) b.classList.add('correct');
@@ -586,48 +680,65 @@
         const isCorrect = selectedOpt.id === currentQuestion.id;
         if (!isCorrect) selectedBtn.classList.add('wrong');
         
-        if (currentMode === 'sm2') handleSm2Answer(isCorrect, currentQuestion.id);
-        else handleCasualAnswer(isCorrect, currentQuestion);
-        showFeedback(isCorrect, allOptions); updateQuizUIState();
+        let sm2Note = '';
+        if (currentMode === 'sm2') {
+            sm2Note = handleSm2Answer(isCorrect, currentQuestion.id, elapsedSec, currentQuestion.sentence);
+        } else {
+            handleCasualAnswer(isCorrect, currentQuestion);
+        }
+        showFeedback(isCorrect, allOptions, rawSec, sm2Note);
+        updateQuizUIState();
+    }
+
+    function getWordForms(singleWord) {
+        const w = singleWord.toLowerCase();
+        const safe = w.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const forms = [safe + '[a-z]*'];
+        if (irregularMap[w]) {
+            irregularMap[w].forEach(v => forms.push(v.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')));
+        }
+        if (w.endsWith('y') && w.length > 2) {
+            forms.push(safe.slice(0, -1) + '(?:y|ied|ies|ying)[a-z]*');
+        }
+        if (w.endsWith('e') && w.length > 2) {
+            forms.push(safe.slice(0, -1) + '(?:e|ed|ing|es)[a-z]*');
+        }
+        return `(?:${forms.join('|')})`;
+    }
+
+    function buildMatchRegex(word) {
+        const clean = word.trim().toLowerCase();
+        const parts = clean.split(/\s+/);
+        if (parts.length > 1) {
+            const firstForms = getWordForms(parts[0]);
+            const rest = parts.slice(1).map(p => p.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')).join('\\s+');
+            const joined = parts.join('').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+            return new RegExp(`\\b(?:${firstForms}\\s+${rest}|${joined}[a-z]*)\\b`, 'gi');
+        }
+        const singleForms = getWordForms(clean);
+        const shortStem = clean.length > 4 ? clean.slice(0, 4).replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') : null;
+        return new RegExp(`\\b(?:${singleForms}${shortStem ? '|' + shortStem + '[a-z]*' : ''})\\b`, 'gi');
     }
 
     function createBlankSentence(sentence, word) {
-        const cleanWord = word.trim().toLowerCase();
-        const safeWord = cleanWord.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-
-        if (irregularMap[cleanWord]) {
-            for (let v of irregularMap[cleanWord]) {
-                const rI = new RegExp(`\\b${v}\\b`, 'gi');
-                if (sentence.match(rI)) return sentence.replace(rI, '__________');
-            }
-        }
-        const r1 = new RegExp(`\\b${safeWord}[a-z]*\\b`, 'gi');
-        if (sentence.match(r1)) return sentence.replace(r1, '__________');
-        
-        if (cleanWord.endsWith('y')) {
-            const stem = safeWord.slice(0, -1); const r2 = new RegExp(`\\b${stem}(y|ied|ies|ying)[a-z]*\\b`, 'gi');
-            if (sentence.match(r2)) return sentence.replace(r2, '__________');
-        }
-        if (cleanWord.endsWith('e')) {
-            const stem = safeWord.slice(0, -1); const r3 = new RegExp(`\\b${stem}(e|ed|ing|es)[a-z]*\\b`, 'gi');
-            if (sentence.match(r3)) return sentence.replace(r3, '__________');
-        }
-        const shortStem = cleanWord.length > 4 ? safeWord.slice(0, 4) : safeWord;
-        const r4 = new RegExp(`\\b${shortStem}[a-z]*\\b`, 'gi');
-        if (sentence.match(r4)) return sentence.replace(r4, '__________');
+        const regex = buildMatchRegex(word);
+        if (sentence.match(regex)) return sentence.replace(regex, '__________');
+        const safeWord = word.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
         return sentence.replace(new RegExp(safeWord, 'i'), '__________');
     }
 
-    function showFeedback(isCorrect, allOptions) {
+    function showFeedback(isCorrect, allOptions, rawSec, sm2Note) {
         const box = document.getElementById('feedbackBox');
         box.className = 'feedback show ' + (isCorrect ? 'correct' : 'wrong');
-        document.getElementById('feedbackTitle').innerHTML = isCorrect ? '✔️ 答對了！' : '❌ 答錯了！正確答案是：';
+        document.getElementById('feedbackTitle').innerText = isCorrect ? '✔️ 答對了！' : '❌ 答錯了！正確答案是：';
+        
+        const timeStr = `${rawSec.toFixed(1)} 秒`;
+        document.getElementById('fbTimeBadge').innerText = sm2Note ? `⏱️ ${timeStr}（${sm2Note}）` : `⏱️ ${timeStr}`;
+
         document.getElementById('fbWord').innerText = currentQuestion.word;
         document.getElementById('fbTranslation').innerText = `(${currentQuestion.translation})`;
         
-        const safeWord = currentQuestion.word.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-        const shortStem = safeWord.length > 4 ? safeWord.slice(0, 4) : safeWord;
-        const regex = new RegExp(`\\b${shortStem}[a-z]*\\b`, 'gi');
+        const regex = buildMatchRegex(currentQuestion.word);
         let hlSentence = currentQuestion.sentence;
         if(hlSentence.match(regex)) hlSentence = hlSentence.replace(regex, match => `<u><b>${match}</b></u>`);
         document.getElementById('fbSentence').innerHTML = hlSentence;
