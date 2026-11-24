@@ -103,10 +103,10 @@
         @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         .feedback.correct { background-color: rgba(72, 187, 120, 0.15); border-left: 6px solid var(--success); }
         .feedback.wrong { background-color: rgba(229, 62, 62, 0.15); border-left: 6px solid var(--danger); }
-        .feedback h3 { margin: 0 0 10px 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;}
+        .feedback h3 { margin: 0 0 10px 0; display: flex; align-items: center; gap: 10px;}
         .feedback p { margin: 6px 0; font-size: 16px; line-height: 1.5;}
         .word-highlight { font-weight: 700; color: var(--primary); font-size: 20px;}
-        .time-tag { font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 20px; background: var(--bg-color); color: var(--text-muted); }
+        .time-tag { display: block; text-align: center; margin-top: 12px; font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 8px; background: var(--bg-color); color: var(--text-muted); }
         .sys-msg { color: var(--success); font-size: 14px; margin-top: 10px; display: none; }
         .badge { background: var(--danger); color: white; padding: 3px 8px; border-radius: 6px; font-size: 12px; vertical-align: middle; margin-left: 5px; font-weight: 600;}
     </style>
@@ -202,15 +202,13 @@
         <div class="options" id="optionsContainer"></div>
 
         <div id="feedbackBox" class="feedback">
-            <h3>
-                <span id="feedbackTitle">結果</span>
-                <span class="time-tag" id="fbTimeBadge">⏱️ 0.0 秒</span>
-            </h3>
+            <h3 id="feedbackTitle">結果</h3>
             <p><span class="word-highlight" id="fbWord">Word</span> <span id="fbTranslation" style="color:var(--text-muted);">翻譯</span></p>
             <p id="fbSentence">完整例句</p>
             <hr style="border: 1px solid var(--border-color); margin: 15px 0;">
             <p style="font-size: 14px; color: var(--text-muted);" id="fbOtherOptions">其他選項解釋</p>
             <button class="btn-primary" style="margin-top: 15px;" id="nextBtn" onclick="nextQuestion()">下一題 (Enter)</button>
+            <div class="time-tag" id="fbTimeBadge">⏱️ 0.0 秒</div>
         </div>
         
         <button class="btn-theme" style="margin-top: 30px; width: 100%;" onclick="showSection('configSection')">暫停測驗並返回設定</button>
@@ -348,6 +346,24 @@
         parseTextToDatabase(rawText);
     }
 
+    function splitWordAndTranslation(line) {
+        if (!/[\u4E00-\u9FFF]/.test(line)) return null;
+        const splitRegex = /\s+(?=(?:(?:n|v|vt|vi|adj|adv|prep|conj|pron|int|aux|art|phr|pl|sing)\.|[\(\[（【](?:n|v|vt|vi|adj|adv|prep|conj|pron|int|aux|art|phr)\.?[\)\]）】]|[\u4E00-\u9FFF\u3000-\u303F\uFF00-\uFFEF]))/i;
+        const idx = line.search(splitRegex);
+        if (idx > 0) {
+            const word = line.slice(0, idx).trim();
+            const translation = line.slice(idx).trim();
+            if (word && translation && /^[a-zA-Z]/.test(word)) {
+                return { word, translation };
+            }
+        }
+        const fallback = line.match(/^([a-zA-Z][a-zA-Z0-9\-\.\'\/]*)\s*([\u4E00-\u9FFF].*)$/);
+        if (fallback) {
+            return { word: fallback[1].trim(), translation: fallback[2].trim() };
+        }
+        return null;
+    }
+
     function parseTextToDatabase(rawText) {
         const lines = rawText.split('\n').map(l => l.trim()).filter(l => l !== '');
         const db = []; let currentUnit = '1-1'; let currentWord = null;
@@ -355,13 +371,12 @@
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
             if (/^\d+-\d+$/.test(line)) { currentUnit = line; continue; }
-            // 完整抓取英文單字與片語（如 check out），直到遇到詞性標記或中文字元為止
-            const wordMatch = line.match(/^([a-zA-Z][a-zA-Z0-9\-\.\'\/\s]*?)\s+(?=(?:(?:n|v|vt|vi|adj|adv|prep|conj|pron|int|aux|art|phr)\.|[\u4E00-\u9FFF\u3000-\u303F\uFF00-\uFFEF（(【\[]))(.*)$/);
+            const parsed = splitWordAndTranslation(line);
             
-            if (wordMatch && !currentWord) {
+            if (parsed && !currentWord) {
                 currentWord = {
-                    id: `${currentUnit}_${wordMatch[1].trim()}`, unit: currentUnit,
-                    word: wordMatch[1].trim(), translation: wordMatch[2].trim(), sentence: ''
+                    id: `${currentUnit}_${parsed.word}`, unit: currentUnit,
+                    word: parsed.word, translation: parsed.translation, sentence: ''
                 };
                 continue;
             }
@@ -375,14 +390,14 @@
         setTimeout(() => showSection('configSection'), 800);
     }
 
-    // 自動修復瀏覽器快取中誤被拆開的片語（如 check + out 付款櫃檯 -> check out + 付款櫃檯）
     function repairWordItem(item) {
-        if (!item || !item.translation) return false;
-        const m = item.translation.match(/^([a-zA-Z][a-zA-Z0-9\-\'\/]*(?:\s+[a-zA-Z][a-zA-Z0-9\-\'\/]*)*)\s+([\u4E00-\u9FFF（(【\[].*)$/);
-        if (m && !/^(?:n|v|vt|vi|adj|adv|prep|conj|pron|int|aux|art|phr)\./i.test(item.translation)) {
+        if (!item || !item.word || !item.translation) return false;
+        const combined = `${item.word} ${item.translation}`.trim();
+        const fixed = splitWordAndTranslation(combined);
+        if (fixed && (fixed.word !== item.word || fixed.translation !== item.translation)) {
             const oldId = item.id;
-            item.word = `${item.word} ${m[1]}`.trim();
-            item.translation = m[2].trim();
+            item.word = fixed.word;
+            item.translation = fixed.translation;
             item.id = `${item.unit}_${item.word}`;
             if (sm2Progress[oldId] && !sm2Progress[item.id]) {
                 sm2Progress[item.id] = sm2Progress[oldId];
