@@ -106,7 +106,6 @@
         .feedback h3 { margin: 0 0 10px 0; display: flex; align-items: center; gap: 10px;}
         .feedback p { margin: 6px 0; font-size: 16px; line-height: 1.5;}
         .word-highlight { font-weight: 700; color: var(--primary); font-size: 20px;}
-        .time-tag { display: block; text-align: center; margin-top: 12px; font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 8px; background: var(--bg-color); color: var(--text-muted); }
         .sys-msg { color: var(--success); font-size: 14px; margin-top: 10px; display: none; }
         .badge { background: var(--danger); color: white; padding: 3px 8px; border-radius: 6px; font-size: 12px; vertical-align: middle; margin-left: 5px; font-weight: 600;}
     </style>
@@ -208,7 +207,6 @@
             <hr style="border: 1px solid var(--border-color); margin: 15px 0;">
             <p style="font-size: 14px; color: var(--text-muted);" id="fbOtherOptions">其他選項解釋</p>
             <button class="btn-primary" style="margin-top: 15px;" id="nextBtn" onclick="nextQuestion()">下一題 (Enter)</button>
-            <div class="time-tag" id="fbTimeBadge">⏱️ 0.0 秒</div>
         </div>
         
         <button class="btn-theme" style="margin-top: 30px; width: 100%;" onclick="showSection('configSection')">暫停測驗並返回設定</button>
@@ -282,7 +280,7 @@
         if(mode === 'casual') {
             desc.innerHTML = "💡 <b>順順考</b>：照著單元順序一題一題刷。答錯的字會先丟進「錯題池」，等該節結束再抓出來考到對為止。中途離開會自動存檔，適合剛開始背單字打底。";
         } else {
-            desc.innerHTML = "💡 <b>循序漸進 (SM-2 + 作答計時)</b>：依句長動態計算反應時間。<b>秒殺答對</b>會大幅拉長複習間距，<b>猶豫過久</b>會縮短間距，<b>答錯</b>則優先插隊重考。";
+            desc.innerHTML = "💡 <b>循序漸進 (SM-2)</b>：在指定範圍內智慧調控！答錯的字會優先插隊重考，系統亦會依據你的作答反應速度自動調整下次複習間距。";
         }
     }
 
@@ -525,7 +523,7 @@
         showSection('quizSection'); executeNext();
     }
 
-    // --- SM-2 演算法核心（錯題優先插隊 + 作答時間分級） ---
+    // --- SM-2 演算法核心（錯題優先插隊 + 後台作答時間分級） ---
     function getNextSm2Word() {
         let reviewDue = currentQuizPool.filter(w => {
             const p = sm2Progress[w.id];
@@ -554,19 +552,15 @@
     }
 
     function evaluateResponseQuality(isCorrect, elapsedSec, sentence) {
-        if (!isCorrect) return { quality: 1, label: '答錯重排' };
+        if (!isCorrect) return 1;
 
         const wordCount = sentence.trim().split(/\s+/).length;
         const fastLimit = Math.max(3.0, 1.5 + wordCount * 0.22);
         const slowLimit = fastLimit * 2.2;
 
-        if (elapsedSec <= fastLimit) {
-            return { quality: 5, label: '⚡ 秒殺記憶' };
-        } else if (elapsedSec <= slowLimit) {
-            return { quality: 4, label: '👍 正常穩健' };
-        } else {
-            return { quality: 3, label: '🤔 猶豫較久' };
-        }
+        if (elapsedSec <= fastLimit) return 5;
+        if (elapsedSec <= slowLimit) return 4;
+        return 3;
     }
 
     function handleSm2Answer(isCorrect, wordId, elapsedSec, sentence) {
@@ -574,7 +568,7 @@
         let p = sm2Progress[wordId];
         globalTurn++;
 
-        const { quality, label } = evaluateResponseQuality(isCorrect, elapsedSec, sentence);
+        const quality = evaluateResponseQuality(isCorrect, elapsedSec, sentence);
 
         if (quality < 3) {
             p.repetition = 0;
@@ -601,8 +595,6 @@
         p.nextReview = globalTurn + p.interval;
         localStorage.setItem('sm2Progress', JSON.stringify(sm2Progress));
         localStorage.setItem('globalTurn', globalTurn);
-
-        return `${label}・下次間隔 ${p.interval} 題`;
     }
 
     // --- 順順考邏輯 ---
@@ -695,13 +687,12 @@
         const isCorrect = selectedOpt.id === currentQuestion.id;
         if (!isCorrect) selectedBtn.classList.add('wrong');
         
-        let sm2Note = '';
         if (currentMode === 'sm2') {
-            sm2Note = handleSm2Answer(isCorrect, currentQuestion.id, elapsedSec, currentQuestion.sentence);
+            handleSm2Answer(isCorrect, currentQuestion.id, elapsedSec, currentQuestion.sentence);
         } else {
             handleCasualAnswer(isCorrect, currentQuestion);
         }
-        showFeedback(isCorrect, allOptions, rawSec, sm2Note);
+        showFeedback(isCorrect, allOptions);
         updateQuizUIState();
     }
 
@@ -742,14 +733,10 @@
         return sentence.replace(new RegExp(safeWord, 'i'), '__________');
     }
 
-    function showFeedback(isCorrect, allOptions, rawSec, sm2Note) {
+    function showFeedback(isCorrect, allOptions) {
         const box = document.getElementById('feedbackBox');
         box.className = 'feedback show ' + (isCorrect ? 'correct' : 'wrong');
         document.getElementById('feedbackTitle').innerText = isCorrect ? '✔️ 答對了！' : '❌ 答錯了！正確答案是：';
-        
-        const timeStr = `${rawSec.toFixed(1)} 秒`;
-        document.getElementById('fbTimeBadge').innerText = sm2Note ? `⏱️ ${timeStr}（${sm2Note}）` : `⏱️ ${timeStr}`;
-
         document.getElementById('fbWord').innerText = currentQuestion.word;
         document.getElementById('fbTranslation').innerText = `(${currentQuestion.translation})`;
         
